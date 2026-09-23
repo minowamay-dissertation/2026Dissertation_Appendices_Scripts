@@ -1,0 +1,1418 @@
+Monte Carlo with 30 Batch Simulations
+
+
+import math 
+
+import os 
+
+import random 
+
+import numpy as np 
+
+import pandas as pd 
+
+import geopandas as gpd 
+
+from shapely.geometry import Polygon, Point 
+
+from mesa import Agent, Model 
+
+from mesa.space import MultiGrid 
+
+import matplotlib.pyplot as plt 
+
+import seaborn as sns 
+
+  
+
+sns.set_theme(style="whitegrid", context="paper", font_scale=1.1) 
+
+  
+
+# ==================================================================== 
+
+# GLOBAL CONFIGURATION 
+
+# ==================================================================== 
+
+TARGET_AGENT_ID = 14 
+
+TOTAL_SEEDS = 30 
+
+RUNS_PER_BATCH = 10 
+
+  
+
+base_dir = "/Users/mayminowa/Desktop/Dissertation_Dataset" 
+
+shapefile_path = os.path.join(base_dir, "NHS_England_Regions", "EA_Regions.shp") 
+
+  
+
+ccs_master_records = { 
+
+    2015: {"total": 14229, "counts": [9052, 4005, 710, 249, 149, 64], "pcts": [63.62, 28.15, 4.99, 1.75, 1.05, 0.45]}, 
+
+    2016: {"total": 13943, "counts": [9145, 3786, 597, 239, 125, 51], "pcts": [65.59, 27.15, 4.28, 1.71, 0.90, 0.37]}, 
+
+    2017: {"total": 13890, "counts": [9127, 3796, 582, 219, 127, 39], "pcts": [65.71, 27.33, 4.19, 1.58, 0.91, 0.28]}, 
+
+    2018: {"total": 13771, "counts": [8724, 3952, 656, 226, 165, 48], "pcts": [63.35, 28.70, 4.76, 1.64, 1.20, 0.35]}, 
+
+    2019: {"total": 13628, "counts": [8619, 3829, 758, 235, 143, 44], "pcts": [63.24, 28.10, 5.56, 1.72, 1.05, 0.32]}, 
+
+    2020: {"total": 13708, "counts": [9974, 2949, 482, 174, 106, 23], "pcts": [72.76, 21.51, 3.52, 1.27, 0.77, 0.17]}, 
+
+    2021: {"total": 13839, "counts": [10818, 2166, 494, 197, 124, 40], "pcts": [78.17, 15.65, 3.57, 1.42, 0.90, 0.29]}, 
+
+    2022: {"total": 13977, "counts": [10550, 2568, 527, 155, 143, 34], "pcts": [75.48, 18.37, 3.77, 1.11, 1.02, 0.24]}, 
+
+    2023: {"total": 14089, "counts": [9412, 2945, 1024, 411, 215, 82], "pcts": [66.80, 20.90, 7.27, 2.92, 1.53, 0.58]}, 
+
+    2024: {"total": 14089, "counts": [9412, 2945, 1024, 411, 215, 82], "pcts": [66.81, 20.91, 7.27, 2.92, 1.53, 0.58]}, 
+
+} 
+
+  
+
+EA_OPERATIONAL_AREAS = { 
+
+    "North": ["Durham", "Newcastle", "Leeds", "Manchester"], 
+
+    "Midlands": ["Birmingham", "Nottingham", "Leicester", "Coventry"], 
+
+    "South_West_Thames": ["Guildford", "Southampton", "Reading", "Bristol"], 
+
+    "East_South_East": ["London", "Norwich", "Cambridge", "Brighton"] 
+
+} 
+
+  
+
+CITY_COORDINATES = { 
+
+    "Durham": (-1.5758, 54.7753), "Newcastle": (-1.6178, 54.9783), 
+
+    "Leeds": (-1.5491, 53.8008), "Manchester": (-2.2426, 53.4808), 
+
+    "Birmingham": (-1.8904, 52.4862), "Nottingham": (-1.1558, 52.9548), 
+
+    "Leicester": (-1.1398, 52.6369), "Coventry": (-1.5197, 52.4068), 
+
+    "Guildford": (-0.5704, 51.2362), "Southampton": (-1.4043, 50.9097), 
+
+    "Reading": (-0.9781, 51.4543), "Bristol": (-2.5879, 51.4545), 
+
+    "London": (-0.1278, 51.5074), "Norwich": (1.2974, 52.6309), 
+
+    "Cambridge": (0.1218, 52.2053), "Brighton": (-0.1372, 50.8225) 
+
+} 
+
+  
+
+# ===================================================================== 
+
+# CORE ENGINE CLASSES 
+
+# ===================================================================== 
+
+class WasteComplianceEngine: 
+
+    def __init__(self, simulation_year=2015): 
+
+        self.current_year = simulation_year 
+
+        self.ccs_master_records = ccs_master_records 
+
+        self.regions = ["North", "Midlands", "South_West_Thames", "East_South_East"] 
+
+  
+
+        self.region_geoms = { 
+
+            "North": Polygon([(-3.2, 53.3), (-3.2, 55.9), (-1.2, 55.9), (-0.2, 54.2), (-0.8, 53.3)]), 
+
+            "Midlands": Polygon([(-3.0, 52.0), (-3.0, 53.3), (-0.8, 53.3), (0.4, 52.8), (0.4, 52.0), (-1.8, 51.3)]), 
+
+            "East_South_East": Polygon([(0.4, 50.7), (0.4, 52.8), (1.8, 52.8), (1.8, 51.0), (1.1, 50.5), (0.4, 50.7)]), 
+
+            "South_West_Thames": Polygon([(-5.7, 50.0), (-5.2, 51.3), (-3.0, 52.0), (-1.8, 51.3), (0.4, 50.7), (-0.8, 50.2)]) 
+
+        } 
+
+        self.ea_regions_gdf = gpd.GeoDataFrame([{"Region": r, "geometry": g} for r, g in self.region_geoms.items()], crs="EPSG:4326") 
+
+         
+
+        projected_gdf = self.ea_regions_gdf.to_crs("EPSG:27700") 
+
+        self.region_coordinates = {row["Region"]: (row["geometry"].centroid.x, row["geometry"].centroid.y) for _, row in projected_gdf.iterrows()} 
+
+         
+
+        self.distance_matrix = {} 
+
+        for r1 in self.regions: 
+
+            self.distance_matrix[r1] = {} 
+
+            c1 = self.region_coordinates.get(r1, (0, 0)) 
+
+            for r2 in self.regions: 
+
+                c2 = self.region_coordinates.get(r2, (0, 0)) 
+
+                dist = math.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2) 
+
+                self.distance_matrix[r1][r2] = max(5.0, dist) 
+
+  
+
+        self.facility_matrix = { 
+
+            "Landfill": {"R_i": 500.0, "T_i": float('inf')}, 
+
+            "Transfer": {"R_i": 200.0, "T_i": 75000.0}, 
+
+            "Treatment": {"R_i": 75.0, "T_i": 75000.0}, 
+
+            "MRS": {"R_i": 150.0, "T_i": 25000.0}, 
+
+            "Incineration": {"R_i": 72.0, "T_i": 200000.0} 
+
+        } 
+
+  
+
+        self.historical_tax_rates = { 
+
+            2015: {'std': 82.60, 'inert': 2.60}, 2016: {'std': 84.40, 'inert': 2.65}, 
+
+            2017: {'std': 86.10, 'inert': 2.70}, 2018: {'std': 88.95, 'inert': 2.80}, 
+
+            2019: {'std': 91.35, 'inert': 2.90}, 2020: {'std': 94.15, 'inert': 3.00}, 
+
+            2021: {'std': 96.70, 'inert': 3.10}, 2022: {'std': 98.60, 'inert': 3.15}, 
+
+            2023: {'std': 102.10, 'inert': 3.25}, 2024: {'std': 103.70, 'inert': 3.30}, 
+
+            2025: {'std': 106.50, 'inert': 3.40}, 2026: {'std': 110.00, 'inert': 3.50}, 
+
+        } 
+
+        for y in range(2027, 2037): 
+
+            self.historical_tax_rates[y] = { 
+
+                'std': self.historical_tax_rates[y-1]['std'] + 3.00, 
+
+                'inert': self.historical_tax_rates[y-1]['inert'] + 0.10 
+
+            } 
+
+  
+
+    def assign_ea_region(self, pos): 
+
+        if pos is None: return "Midlands" 
+
+        point = Point(pos) 
+
+        for _, row in self.ea_regions_gdf.iterrows(): 
+
+            if point.within(row["geometry"]): return row["Region"] 
+
+        return min(self.region_coordinates.keys(), key=lambda r: Point(pos).distance(Point(self.region_coordinates[r]))) 
+
+  
+
+    def get_tax_rates(self, year): 
+
+        safe_year = min(max(year, 2015), 2036) 
+
+        return self.historical_tax_rates[safe_year]["std"], self.historical_tax_rates[safe_year]["inert"] 
+
+  
+
+    def step_environmental_physics(self, facility_nodes): 
+
+        for node in facility_nodes: 
+
+            if getattr(node, 'is_bankrupt', False): continue 
+
+            if getattr(node, 'facility_type', None) in ["Treatment", "MRS"]: 
+
+                if not getattr(node, 'is_stabilized', True) and getattr(node, 'untreated_inventory', 0.0) > 0: 
+
+                    if not hasattr(node, 'pollution_trace_omega'): node.pollution_trace_omega = 0.0 
+
+                    node.pollution_trace_omega += (node.untreated_inventory * 0.002) 
+
+                    node.dynamic_detection_probability = min(1.0, 0.05 + (0.1 * node.pollution_trace_omega)) 
+
+                else: 
+
+                    if hasattr(node, 'pollution_trace_omega'): node.pollution_trace_omega = max(0.0, node.pollution_trace_omega - 0.05) 
+
+                    node.dynamic_detection_probability = 0.05 
+
+  
+
+    def execute_treatment_arbitrage_state(self, node, volume_v, c_trt, h_raw=1.0, h_legal=0.1, is_arbitrage=False): 
+
+        if is_arbitrage: 
+
+            if not hasattr(node, 'untreated_inventory'): node.untreated_inventory = 0.0 
+
+            node.untreated_inventory += volume_v 
+
+            node.is_stabilized = False 
+
+            node.hazard_intensity = h_raw 
+
+            return volume_v * c_trt, False 
+
+        else: 
+
+            node.is_stabilized = True 
+
+            node.hazard_intensity = h_legal 
+
+            if hasattr(node, 'untreated_inventory'): node.untreated_inventory = max(0.0, node.untreated_inventory - volume_v) 
+
+            return -(volume_v * c_trt), True 
+
+  
+
+    def calculate_remediation_penalty(self, volume_v, c_trt, beta_clean=2.0): 
+
+        return volume_v * (c_trt * beta_clean) 
+
+  
+
+  
+
+class SpatialOperatorAgent(Agent): 
+
+    def __init__(self, unique_id, model, lat_long=None, facility_type="Transfer", initial_rating="A", tier="small", cost_pressure=0.5): 
+
+        super().__init__(model) 
+
+        self.unique_id = unique_id 
+
+        self.lat_long = lat_long 
+
+        self.region = self.model.engine.assign_ea_region(lat_long) 
+
+        self.facility_type = facility_type 
+
+        self.tier = tier 
+
+        self.cost_pressure = cost_pressure 
+
+  
+
+        matrix_specs = self.model.engine.facility_matrix.get(facility_type, {"R_i": 200.0, "T_i": 75000.0}) 
+
+        self.max_storage_s_i = 50000.0 
+
+        self.current_inventory_i_it = 0.0 
+
+        self.daily_processing_rate_r_i = matrix_specs["R_i"] 
+
+        self.financial_reserves = model.random.uniform(20000.0, 80000.0) 
+
+        self.baseline_operational_cost = 14000.0 
+
+        self.rating = initial_rating 
+
+        self.is_bankrupt = False 
+
+        self.historical_breaches = 0 
+
+        self.risk_tolerance = np.random.beta(2, 4) 
+
+        self.perceived_impunity = 0.0 
+
+        self.preferred_target_region = self.region 
+
+  
+
+        self.is_tax_arbitrage = initial_rating in ["C", "D", "E", "F"] 
+
+        self.is_treatment_arbitrage = initial_rating in ["D", "E", "F"] and facility_type in ["Treatment", "MRS"] 
+
+        self.is_capacity_arbitrage = False 
+
+        self.is_stabilized = initial_rating in ["A", "B", "C"] 
+
+        self.true_compliance = 1.0 if initial_rating in ["A", "B"] else 0.0 
+
+  
+
+        self.time_since_last_inspection = random.randint(0, 24) 
+
+        self.uncertainty_sigma = min(1.0, self.time_since_last_inspection * 0.05) 
+
+        self.has_active_enforcement_notice = False 
+
+        self.enforcement_countdown = 0 
+
+        self.community_complaint_active = False 
+
+  
+
+        if not self.is_stabilized and facility_type in ["Treatment", "MRS"]: 
+
+            self.untreated_inventory = 1000.0 
+
+            self.pollution_trace_omega = 2.0 
+
+        else: 
+
+            self.pollution_trace_omega = 0.0 
+
+  
+
+    def evaluate_peer_pressure(self): 
+
+        if not self.pos: return 0.0 
+
+        neighbors = self.model.grid.get_neighbors(self.pos, moore=True, include_center=False, radius=3) 
+
+        peer_agents = [a for a in neighbors if isinstance(a, SpatialOperatorAgent) and not a.is_bankrupt] 
+
+        if not peer_agents: return 0.0 
+
+        arbitrage_count = sum(1 for p in peer_agents if p.is_tax_arbitrage or p.is_treatment_arbitrage or p.is_capacity_arbitrage) 
+
+        return arbitrage_count / len(peer_agents) 
+
+  
+
+    def evaluate_spatial_crime_displacement(self): 
+
+        regional_heatmaps = getattr(self.model, 'regional_enforcement_pressure', {r: 0.1 for r in self.model.engine.regions}) 
+
+        distance_lookup = self.model.engine.distance_matrix[self.region] 
+
+        region_scores = {} 
+
+        for r in self.model.engine.regions: 
+
+            pressure = regional_heatmaps.get(r, 0.1) 
+
+            dist_friction = distance_lookup.get(r, 10.0) 
+
+            impedance = math.exp(min(700.0, 0.05 * dist_friction)) 
+
+            region_scores[r] = max(0.001, 1.0 / (pressure * impedance)) 
+
+        total = sum(region_scores.values()) 
+
+        self.preferred_target_region = np.random.choice(self.model.engine.regions, p=[region_scores[r]/total for r in self.model.engine.regions]) 
+
+  
+
+    def update_behavioral_complexities(self, current_year): 
+
+        if self.is_bankrupt: return 
+
+        peer_ratio = self.evaluate_peer_pressure() 
+
+        burn_rate = max(1.0, self.baseline_operational_cost) 
+
+        cash_runway_months = self.financial_reserves / burn_rate 
+
+        desperation = 2.5 if cash_runway_months < 3.0 else 1.0 
+
+  
+
+        if self.model.regional_enforcement_pressure.get(self.region, 0.1) > 0.4 and self.tier == "large" and random.random() < 0.7: 
+
+            self.is_tax_arbitrage = self.is_treatment_arbitrage = self.is_capacity_arbitrage = False 
+
+            self.true_compliance = 1.0 
+
+            self.is_stabilized = True 
+
+        else: 
+
+            base_prob = max(0.05, (0.20 + (self.cost_pressure * 0.3)) - ((1-peer_ratio) * 0.35)) 
+
+            comp_prob = min(1.0, (base_prob + (peer_ratio * 0.4)) * desperation) 
+
+            if current_year >= 2026: comp_prob *= 0.70 
+
+  
+
+            if random.random() < comp_prob: 
+
+                self.true_compliance = 0.0 
+
+                self.is_tax_arbitrage = True 
+
+                self.is_stabilized = False 
+
+                if self.facility_type in ["Treatment", "MRS"]: self.is_treatment_arbitrage = True 
+
+            else: 
+
+                self.true_compliance = 1.0 
+
+                self.is_tax_arbitrage = self.is_treatment_arbitrage = self.is_capacity_arbitrage = False 
+
+                self.is_stabilized = True 
+
+  
+
+    def update_annual_compliance_with_contagion(self, current_year, all_operators): 
+
+        if current_year <= 2024: 
+
+            yr_record = self.model.engine.ccs_master_records.get(current_year, self.model.engine.ccs_master_records[2024]) 
+
+            raw_historical = np.array(yr_record["pcts"], dtype=float) 
+
+            historical_probs = raw_historical / raw_historical.sum() 
+
+            self.rating = np.random.choice(["A", "B", "C", "D", "E", "F"], p=historical_probs) 
+
+            if self.rating in ["A", "B"]: 
+
+                self.true_compliance = 1.0; self.is_stabilized = True 
+
+                self.is_tax_arbitrage = self.is_treatment_arbitrage = self.is_capacity_arbitrage = False 
+
+            else: 
+
+                self.true_compliance = 0.0; self.is_stabilized = False 
+
+                self.is_tax_arbitrage = True 
+
+                self.is_treatment_arbitrage = (self.facility_type in ["Treatment", "MRS"]) 
+
+        else: 
+
+            self.update_behavioral_complexities(current_year) 
+
+            self.rating = random.choice(["A", "B"]) if self.true_compliance == 1.0 else random.choice(["C", "D", "F"]) 
+
+  
+
+    def process_incoming_consignment(self, volume_v): 
+
+        if self.is_bankrupt: return 
+
+        self.perceived_impunity = self.evaluate_peer_pressure() 
+
+        self.evaluate_spatial_crime_displacement() 
+
+  
+
+        stress = max(1.0, 4.0 / max(0.1, self.financial_reserves / max(1.0, self.baseline_operational_cost))) 
+
+        effective_risk = self.risk_tolerance * stress 
+
+  
+
+        std_tax, inert_tax = self.model.engine.get_tax_rates(self.model.current_year) 
+
+        eu_tax = (volume_v * (std_tax - inert_tax)) - (max(0.01, getattr(self, 'dynamic_detection_probability', 0.05) - (self.perceived_impunity * 0.1)) * (volume_v * std_tax * 1.5)) 
+
+  
+
+        raw_tax = (eu_tax > 0) and (effective_risk + (self.perceived_impunity * 0.3) > 0.3) 
+
+        self.is_tax_arbitrage = ((1 - 0.2) * (1.0 if getattr(self, 'is_tax_arbitrage', False) else 0.0) + 0.2 * (1.0 if raw_tax else 0.0)) >= 0.5 
+
+         
+
+        if self.is_tax_arbitrage: self.financial_reserves += (volume_v * (std_tax - inert_tax)) 
+
+  
+
+        if self.facility_type in ["Treatment", "MRS"]: 
+
+            eu_treat = (volume_v * 50.0) - (max(0.01, getattr(self, 'dynamic_detection_probability', 0.05) - (self.perceived_impunity * 0.1)) * (volume_v * 100.0)) 
+
+            raw_treat = (eu_treat > 0) and (effective_risk + (self.perceived_impunity * 0.3) > 0.35) 
+
+            self.is_treatment_arbitrage = ((1 - 0.2) * (1.0 if getattr(self, 'is_treatment_arbitrage', False) else 0.0) + 0.2 * (1.0 if raw_treat else 0.0)) >= 0.5 
+
+            fin_delta, _ = self.model.engine.execute_treatment_arbitrage_state(self, volume_v, 50.0, is_arbitrage=self.is_treatment_arbitrage) 
+
+            self.financial_reserves += fin_delta 
+
+  
+
+        self.current_inventory_i_it += volume_v 
+
+        if self.current_inventory_i_it > self.max_storage_s_i: 
+
+            self.financial_reserves -= (self.current_inventory_i_it - self.max_storage_s_i) * 45.0   
+
+            self.current_inventory_i_it = self.max_storage_s_i   
+
+            self.is_capacity_arbitrage = True 
+
+        else: self.is_capacity_arbitrage = False 
+
+  
+
+    def step(self): 
+
+        if self.is_bankrupt: return 
+
+        self.time_since_last_inspection += 1 
+
+        self.uncertainty_sigma = min(1.0, self.uncertainty_sigma + 0.05)  
+
+        if self.time_since_last_inspection >= 12 and not self.has_active_enforcement_notice and self.rating in ["C", "D", "E"]: 
+
+            self.rating = "B"  
+
+        self.community_complaint_active = True if (self.is_capacity_arbitrage or self.pollution_trace_omega > 1.0) and random.random() < 0.30 else False 
+
+        self.financial_reserves += (self.model.random.uniform(14500.0, 23000.0) - self.baseline_operational_cost) 
+
+        if self.financial_reserves <= 0: 
+
+            self.is_bankrupt = True 
+
+            self.rating = "F" 
+
+  
+
+  
+
+# ==================================================================== 
+
+# EA INSPECTOR RL AGENT (FIXED TELEMETRY DENOMINATORS) 
+
+# ==================================================================== 
+
+class EAInspectorRLAgent(Agent): 
+
+    def __init__(self, unique_id, model): 
+
+        super().__init__(model) 
+
+        self.unique_id = unique_id 
+
+        self.q_table = np.zeros((3, 2, 2, 4, 16)) 
+
+        self.alpha, self.gamma, self.epsilon = 0.20, 0.95, 0.20 
+
+        self.last_state = (0, 0, 0, 0) 
+
+        self.last_action = 0 
+
+         
+
+        self.phase1_audits = 0 
+
+        self.phase1_caught = 0 
+
+        self.phase2_audits = 0 
+
+        self.phase2_caught = 0 
+
+         
+
+        # Proper per-tactic counts (audits vs caught) 
+
+        self.tactic_audits = {0: 0, 1: 0, 2: 0, 3: 0} 
+
+        self.tactic_caught = {0: 0, 1: 0, 2: 0, 3: 0} 
+
+  
+
+    def get_state(self): 
+
+        active_ops = [a for a in self.model.agents if isinstance(a, SpatialOperatorAgent) and not a.is_bankrupt] 
+
+        r_counts = {r: 0 for r in self.model.engine.regions} 
+
+        r_omega = {r: 0 for r in self.model.engine.regions} 
+
+        for op in active_ops: 
+
+            if getattr(op, 'true_compliance', 1.0) == 0.0 or op.is_tax_arbitrage or op.is_treatment_arbitrage or op.is_capacity_arbitrage: 
+
+                r_counts[op.region] += 1 
+
+                if getattr(op, 'pollution_trace_omega', 0.0) > 3.0: r_omega[op.region] += 1 
+
+        highest = max(r_counts, key=r_counts.get) 
+
+        return (0 if r_counts[highest] < 200 else (1 if r_counts[highest] < 600 else 2),  
+
+                1 if r_omega[highest] > 50 else 0, 1 if self.model.current_year >= 2026 else 0,  
+
+                self.model.engine.regions.index(highest)) 
+
+  
+
+    def execute_inspections(self, active_ops): 
+
+        is_phase_1 = (self.model.current_year <= 2024) 
+
+        dynamic_rate = max(0.01, min(0.04, self.epsilon)) 
+
+        self.last_state = self.get_state() 
+
+        self.last_action = random.randint(0, 15) if is_phase_1 or random.random() < self.epsilon else int(np.argmax(self.q_table[self.last_state])) 
+
+  
+
+        reg_idx = self.last_action // 4 
+
+        sub_policy = self.last_action % 4 
+
+        focus_reg = self.model.engine.regions[reg_idx] 
+
+  
+
+        for op in active_ops: 
+
+            if getattr(op, 'has_active_enforcement_notice', False): 
+
+                op.enforcement_countdown -= 1 
+
+                if op.enforcement_countdown <= 0: op.has_active_enforcement_notice = False  
+
+        # ================================================================= 
+
+        # REFINED TACTICAL RULES 
+
+        # ================================================================= 
+
+        is_remote = False 
+
+        if is_phase_1: 
+
+            sorted_ops = sorted([o for o in active_ops if o.region == focus_reg], key=lambda o: random.random()) 
+
+        else: 
+
+            if sub_policy == 0: 
+
+                target_pool = [o for o in active_ops if o.region == focus_reg and getattr(o, 'has_active_enforcement_notice', False)] 
+
+                sorted_ops = sorted(target_pool if target_pool else [o for o in active_ops if o.region == focus_reg], key=lambda o: getattr(o, 'pollution_trace_omega', 0.0), reverse=True) 
+
+            elif sub_policy == 1: 
+
+                large_rogues = [o for o in active_ops if o.region == focus_reg and (o.tier == "large" or o.cost_pressure > 0.6) and (not o.is_stabilized or o.is_tax_arbitrage)] 
+
+                network_targets = set() 
+
+                for hub in large_rogues: 
+
+                    if hub.pos: 
+
+                        neighbors = self.model.grid.get_neighbors(hub.pos, moore=True, include_center=False, radius=4) 
+
+                        for n in neighbors: 
+
+                            if isinstance(n, SpatialOperatorAgent) and n.region == focus_reg and n.tier in ["small", "medium"] and not n.is_bankrupt: 
+
+                                network_targets.add(n) 
+
+                target_pool = list(network_targets) + large_rogues 
+
+                if not target_pool: target_pool = [o for o in active_ops if o.region == focus_reg] 
+
+                sorted_ops = sorted(target_pool, key=lambda o: getattr(o, 'cost_pressure', 0.5), reverse=True) 
+
+            elif sub_policy == 2: 
+
+                target_pool = [o for o in active_ops if o.region == focus_reg and (getattr(o, 'pollution_trace_omega', 0.0) > 0.5 or getattr(o, 'community_complaint_active', False))] 
+
+                sorted_ops = sorted(target_pool if target_pool else [o for o in active_ops if o.region == focus_reg], key=lambda o: getattr(o, 'pollution_trace_omega', 0.0), reverse=True) 
+
+            else: 
+
+                is_remote = True 
+
+                sorted_ops = sorted([o for o in active_ops if o.region == focus_reg], key=lambda o: random.random()) 
+
+  
+
+        remote_batch = int(max(1, len([o for o in active_ops if o.region == focus_reg]) * 0.10)) 
+
+        physical_batch = int(max(1, len([o for o in active_ops if o.region == focus_reg]) * dynamic_rate)) 
+
+        sample = sorted_ops[:(remote_batch if is_remote else min(physical_batch, len(sorted_ops)))] 
+
+  
+
+        # Increment audit denominators correctly (per inspected agent in sample) 
+
+        sample_size = len(sample) 
+
+        if sample_size > 0: 
+
+            if is_phase_1: 
+
+                self.phase1_audits += sample_size 
+
+            else: 
+
+                if is_remote: 
+
+                    self.tactic_audits[3] += sample_size 
+
+                else: 
+
+                    self.phase2_audits += sample_size 
+
+                    self.tactic_audits[sub_policy] += sample_size 
+
+  
+
+        caught = 0 
+
+        for agent in sample: 
+
+            agent.time_since_last_inspection = 0 
+
+            agent.uncertainty_sigma = 0.0 
+
+            agent.community_complaint_active = False 
+
+            is_rogue = agent.is_tax_arbitrage or agent.is_capacity_arbitrage or agent.is_treatment_arbitrage or not agent.is_stabilized 
+
+  
+
+            if is_remote: 
+
+                if is_rogue and not is_phase_1 and random.random() < 0.75: 
+
+                    caught += 1 
+
+                    self.phase2_caught += 1 
+
+                    self.tactic_caught[3] += 1 
+
+                    agent.historical_breaches += 1 
+
+                    agent.has_active_enforcement_notice = True 
+
+                    agent.enforcement_countdown = 3 
+
+                    agent.financial_reserves -= self.model.engine.calculate_remediation_penalty(40.0, 15.0) 
+
+            else: 
+
+                if is_phase_1: 
+
+                    if is_rogue: 
+
+                        caught += 1 
+
+                        self.phase1_caught += 1 
+
+                else: 
+
+                    if is_rogue: 
+
+                        caught += 1 
+
+                        self.phase2_caught += 1 
+
+                        self.tactic_caught[sub_policy] += 1 
+
+  
+
+                if agent.has_active_enforcement_notice: agent.has_active_enforcement_notice = False  
+
+                if is_rogue: 
+
+                    agent.historical_breaches += 1 
+
+                    agent.has_active_enforcement_notice = True 
+
+                    agent.enforcement_countdown = 3  
+
+                    fine = self.model.engine.calculate_remediation_penalty(80.0, 30.0) * math.pow(1.6, agent.historical_breaches - 1) 
+
+                    agent.financial_reserves -= fine 
+
+                    agent.rating = {"F": "E", "E": "D", "D": "C", "C": "B", "B": "A", "A": "A"}.get(agent.rating, "B") 
+
+                    if agent.rating in ["A", "B"]: 
+
+                        agent.is_tax_arbitrage = agent.is_treatment_arbitrage = agent.is_capacity_arbitrage = False 
+
+                        agent.is_stabilized = True 
+
+                        agent.true_compliance = 1.0 
+
+  
+
+        for r in self.model.engine.regions: 
+
+            self.model.regional_enforcement_pressure[r] = max(0.05, sum(1 for a in sample if a.region == r) / max(1, len(sample))) 
+
+  
+
+        if not is_phase_1: 
+
+            rwd = (caught * 5000.0) + ((caught / max(1, sample_size) if not is_remote else 0.0) * 100000.0) - ((sample_size - caught) * 2000.0) 
+
+            self.q_table[self.last_state + (self.last_action,)] += self.alpha * (rwd + self.gamma * np.max(self.q_table[self.get_state()]) - self.q_table[self.last_state + (self.last_action,)]) 
+
+  
+
+  
+
+class SpatialWasteMarketModel(Model): 
+
+    def __init__(self, width=150, height=150, start_year=2015, seed=42): 
+
+        super().__init__() 
+
+        random.seed(seed) 
+
+        np.random.seed(seed) 
+
+        self.grid = MultiGrid(width, height, torus=True) 
+
+        self.current_year = start_year 
+
+        self.current_month = 1 
+
+        self.engine = WasteComplianceEngine(simulation_year=start_year) 
+
+        self.regional_enforcement_pressure = {r: 0.1 for r in self.engine.regions} 
+
+        self.inspector_agent = EAInspectorRLAgent(unique_id=9999, model=self) 
+
+         
+
+        self.simulation_history = []  
+
+        self.agent_14_tactical_history = []  
+
+        self.total_dumped_waste = 0.0 
+
+  
+
+        total_agents = self.engine.ccs_master_records.get(start_year, self.engine.ccs_master_records[2015])["total"] 
+
+        probs = np.array(self.engine.ccs_master_records.get(start_year, self.engine.ccs_master_records[2015])["pcts"], dtype=float) 
+
+        probs /= probs.sum() 
+
+  
+
+        agent_id = 1 
+
+        for region in self.engine.regions: 
+
+            r_count = int(total_agents * {"North": 0.28, "Midlands": 0.27, "South_West_Thames": 0.20, "East_South_East": 0.25}[region]) 
+
+            for _ in range(r_count): 
+
+                tier_roll = random.random() 
+
+                op = SpatialOperatorAgent( 
+
+                    unique_id=agent_id, model=self, lat_long=CITY_COORDINATES[random.choice(EA_OPERATIONAL_AREAS[region])],  
+
+                    facility_type=random.choice(list(self.engine.facility_matrix.keys())),  
+
+                    initial_rating=np.random.choice(["A", "B", "C", "D", "E", "F"], p=probs), 
+
+                    tier="small" if tier_roll < 0.6 else ("medium" if tier_roll < 0.85 else "large"), 
+
+                    cost_pressure=random.uniform(0.7, 1.0) if tier_roll < 0.6 else (random.uniform(0.4, 0.7) if tier_roll < 0.85 else random.uniform(0.1, 0.4)) 
+
+                ) 
+
+                self.grid.place_agent(op, (0, 0)) 
+
+                self.agents.add(op) 
+
+                agent_id += 1 
+
+  
+
+    def step(self): 
+
+        active_ops = [a for a in self.agents if isinstance(a, SpatialOperatorAgent) and not a.is_bankrupt] 
+
+        if self.current_month == 1: 
+
+            for agent in active_ops: agent.update_annual_compliance_with_contagion(self.current_year, active_ops) 
+
+         
+
+        self.engine.step_environmental_physics(active_ops) 
+
+  
+
+        for agent in active_ops: 
+
+            agent.step() 
+
+            vol = max(5.0, 35.0 * (agent.daily_processing_rate_r_i / 200.0) * (1.25 if self.current_year >= 2026 else 1.0) * math.exp(self.random.gauss(0.0, 0.3))) 
+
+            agent.process_incoming_consignment(vol) 
+
+            if not agent.is_stabilized or agent.is_tax_arbitrage or agent.is_treatment_arbitrage or agent.is_capacity_arbitrage: 
+
+                self.total_dumped_waste += vol 
+
+  
+
+        if self.inspector_agent:  
+
+            self.inspector_agent.execute_inspections(active_ops) 
+
+  
+
+            if self.current_year >= 2025: 
+
+                target_agent = next((a for a in active_ops if a.unique_id == TARGET_AGENT_ID), None) 
+
+                if target_agent: 
+
+                    reg_idx = self.inspector_agent.last_action // 4 
+
+                    tactic = self.inspector_agent.last_action % 4 
+
+                     
+
+                    # Record Agent 14 tactical state whenever inspected or targeted 
+
+                    self.agent_14_tactical_history.append({ 
+
+                        "tactic": tactic, 
+
+                        "true_compliance": target_agent.true_compliance, 
+
+                        "is_arb": (target_agent.is_tax_arbitrage or target_agent.is_treatment_arbitrage or target_agent.is_capacity_arbitrage), 
+
+                        "omega": target_agent.pollution_trace_omega 
+
+                    }) 
+
+  
+
+        if self.current_month == 12: 
+
+            compliance_count = sum(1 for a in active_ops if getattr(a, 'true_compliance', 1.0) == 1.0) 
+
+            comp_rate = (compliance_count / max(1, len(active_ops))) * 100.0 
+
+             
+
+            target_agent = next((a for a in active_ops if a.unique_id == TARGET_AGENT_ID), None) 
+
+            agent_states_list = [] 
+
+            if target_agent: 
+
+                agent_states_list.append({ 
+
+                    "id": TARGET_AGENT_ID, 
+
+                    "true_compliance": target_agent.true_compliance, 
+
+                    "tax_arb": target_agent.is_tax_arbitrage, 
+
+                    "cap_arb": target_agent.is_capacity_arbitrage, 
+
+                    "omega": target_agent.pollution_trace_omega, 
+
+                    "financial_reserves": target_agent.financial_reserves 
+
+                }) 
+
+  
+
+            self.simulation_history.append({ 
+
+                "year": self.current_year, 
+
+                "month": 12, 
+
+                "true_compliance_rate": comp_rate, 
+
+                "agent_states": agent_states_list 
+
+            }) 
+
+  
+
+        self.current_month += 1 
+
+        if self.current_month > 12: 
+
+            self.current_month = 1 
+
+            self.current_year += 1 
+
+            if self.inspector_agent and self.current_year >= 2025: 
+
+                self.inspector_agent.epsilon = max(0.02, self.inspector_agent.epsilon * 0.50) 
+
+  
+
+  
+
+# ==================================================================== 
+
+# PLOTTING FUNCTIONS 
+
+# ==================================================================== 
+
+def generate_figure_agent_14_behavioral_panel(mc_history_dict, target_id=14): 
+
+    print(f"\nGenerating Figure A: Agent {target_id} Behavioral Evolution (2015–2036)...") 
+
+    years = list(range(2015, 2037)) 
+
+    data_by_year = {yr: {"compliance": [], "detection": [], "eu": []} for yr in years} 
+
+     
+
+    for seed, history in mc_history_dict.items(): 
+
+        for rec in history: 
+
+            if rec.get("month", 12) == 12:  
+
+                yr = rec["year"] 
+
+                if yr in years: 
+
+                    match = next((a for a in rec["agent_states"] if a["id"] == target_id), None) 
+
+                    if match: 
+
+                        is_comp = match.get("true_compliance", 1.0) 
+
+                        data_by_year[yr]["compliance"].append(is_comp) 
+
+                        data_by_year[yr]["detection"].append(match.get("omega", 0.0)) 
+
+                        data_by_year[yr]["eu"].append(match.get("financial_reserves", 50000.0)) 
+
+  
+
+    plot_years, comp_mean, comp_lower, comp_upper = [], [], [], [] 
+
+    det_mean, det_lower, det_upper = [], [], [] 
+
+    eu_mean, eu_lower, eu_upper = [], [], [] 
+
+  
+
+    for yr in years: 
+
+        c_vals = data_by_year[yr]["compliance"] 
+
+        d_vals = data_by_year[yr]["detection"] 
+
+        e_vals = data_by_year[yr]["eu"] 
+
+         
+
+        if c_vals: 
+
+            plot_years.append(yr) 
+
+            cm, cs = np.mean(c_vals), np.std(c_vals) 
+
+            comp_mean.append(cm); comp_lower.append(max(0.0, cm - cs)); comp_upper.append(min(1.0, cm + cs)) 
+
+             
+
+            dm, ds = np.mean(d_vals), np.std(d_vals) 
+
+            det_mean.append(dm); det_lower.append(max(0.0, dm - ds)); det_upper.append(dm + ds) 
+
+             
+
+            em, es = np.mean(e_vals), np.std(e_vals) 
+
+            eu_mean.append(em); eu_lower.append(em - es); eu_upper.append(em + es) 
+
+  
+
+    if not plot_years: return 
+
+  
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 11), sharex=True) 
+
+     
+
+    axes[0].plot(plot_years, comp_mean, color="#1f77b4", linewidth=2.5, label="Mean Compliance Probability") 
+
+    axes[0].fill_between(plot_years, comp_lower, comp_upper, color="#1f77b4", alpha=0.2, label=f"± 1 SD Envelope ({TOTAL_SEEDS} Seeds)") 
+
+    axes[0].axvline(x=2026, color="black", linestyle="--", linewidth=1.5, label="DWT Policy Shock (2026)") 
+
+    axes[0].set_ylabel("Pr(Compliance)", fontweight="bold") 
+
+    axes[0].set_title(f"Agent {target_id}'s Behavioural Model Evolution (Aggregated across {TOTAL_SEEDS} Seeds)", fontsize=13, fontweight="bold", pad=10) 
+
+    axes[0].set_ylim(-0.05, 1.05) 
+
+    axes[0].legend(loc="lower left", frameon=True, fontsize=10) 
+
+     
+
+    axes[1].plot(plot_years, det_mean, color="#d62728", linewidth=2.5, label="Mean Pollution Trace (ω)") 
+
+    axes[1].fill_between(plot_years, det_lower, det_upper, color="#d62728", alpha=0.2, label="± 1 SD Envelope") 
+
+    axes[1].axvline(x=2026, color="black", linestyle="--", linewidth=1.5) 
+
+    axes[1].set_ylabel("Trace Intensity (ω)", fontweight="bold") 
+
+    axes[1].legend(loc="upper left", frameon=True, fontsize=10) 
+
+     
+
+    axes[2].plot(plot_years, eu_mean, color="#2ca02c", linewidth=2.5, label="Mean Financial Buffer / EU (£)") 
+
+    axes[2].fill_between(plot_years, eu_lower, eu_upper, color="#2ca02c", alpha=0.2, label="± 1 SD Envelope") 
+
+    axes[2].axvline(x=2026, color="black", linestyle="--", linewidth=1.5, label="DWT Mandate") 
+
+    axes[2].set_ylabel("Reserves / EU (£)", fontweight="bold") 
+
+    axes[2].set_xlabel("Simulation Year (2015–2036)", fontweight="bold") 
+
+    axes[2].legend(loc="upper left", frameon=True, fontsize=10) 
+
+  
+
+    for ax in axes: 
+
+        ax.grid(True, linestyle=":", alpha=0.7) 
+
+        ax.set_xlim(2015, 2036) 
+
+        ax.set_xticks(range(2015, 2037, 2)) 
+
+  
+
+    sns.despine() 
+
+    plt.tight_layout() 
+
+    output_filename = os.path.join(os.path.expanduser("~"), "Desktop", f"Figure_Agent_{target_id}_Behavioral_Model_Aggregated.png") 
+
+    plt.savefig(output_filename, dpi=300, bbox_inches="tight") 
+
+    print(f"[SUCCESS] Timeline figure saved to: {output_filename}") 
+
+  
+
+  
+
+def generate_figure_agent_14_tactical_adaptation(tactical_data, target_id=14): 
+
+    print(f"\nGenerating Figure B: Agent {target_id} Tactical Adaptation Profile...") 
+
+    if not tactical_data: return 
+
+     
+
+    df = pd.DataFrame(tactical_data) 
+
+     
+
+    tactic_names = { 
+
+        0: "Tactic 0:\nCompliance Rating Risk", 
+
+        1: "Tactic 1:\nOrganised Waste Flow", 
+
+        2: "Tactic 2:\nCommunity Friction", 
+
+        3: "Tactic 3:\nRemote Audit / DWT" 
+
+    } 
+
+    df['Tactic_Name'] = df['tactic'].map(tactic_names) 
+
+    df['True_Compliance_%'] = df['true_compliance'] * 100.0 
+
+    df['Arbitrage_Likelihood_%'] = df['is_arb'].astype(int) * 100.0 
+
+    df['Pollution_Trace_Omega'] = df['omega'] 
+
+     
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5)) 
+
+     
+
+    sns.barplot(data=df, x='Tactic_Name', y='True_Compliance_%', ax=axes[0], palette='Blues_r', capsize=.1) 
+
+    axes[0].set_title(f'Agent {target_id}: Compliance vs. Refined Tactic', fontweight='bold') 
+
+    axes[0].set_ylabel('Pr(Compliance) (%)') 
+
+    axes[0].set_xlabel('') 
+
+    axes[0].set_ylim(0, 100) 
+
+  
+
+    sns.barplot(data=df, x='Tactic_Name', y='Arbitrage_Likelihood_%', ax=axes[1], palette='Reds_r', capsize=.1) 
+
+    axes[1].set_title(f'Agent {target_id}: Total Arbitrage vs. Refined Tactic', fontweight='bold') 
+
+    axes[1].set_ylabel('Pr(Arbitrage / Breach) (%)') 
+
+    axes[1].set_xlabel('') 
+
+    axes[1].set_ylim(0, 100) 
+
+  
+
+    sns.barplot(data=df, x='Tactic_Name', y='Pollution_Trace_Omega', ax=axes[2], palette='Greens_r', capsize=.1) 
+
+    axes[2].set_title(f'Agent {target_id}: Pollution Trace (ω) vs. Refined Tactic', fontweight='bold') 
+
+    axes[2].set_ylabel('Trace Intensity (ω)') 
+
+    axes[2].set_xlabel('') 
+
+  
+
+    plt.tight_layout() 
+
+    output_filename = os.path.join(os.path.expanduser("~"), "Desktop", f"Figure_Agent_{target_id}_Tactical_Adaptation_Refined.png") 
+
+    plt.savefig(output_filename, dpi=300, bbox_inches="tight") 
+
+    print(f"[SUCCESS] Tactical adaptation figure saved to: {output_filename}") 
+
+  
+
+  
+
+if __name__ == "__main__": 
+
+    desktop_path = os.path.expanduser("~/Desktop") 
+
+    os.makedirs(desktop_path, exist_ok=True) 
+
+  
+
+    num_batches = TOTAL_SEEDS // RUNS_PER_BATCH 
+
+    for b in range(1, num_batches + 1): 
+
+        batch_seeds = [42 + (b - 1) * 190 + i * 19 for i in range(RUNS_PER_BATCH)] 
+
+        print(f"\n==========================================") 
+
+        print(f"EXECUTING BATCH {b}/{num_batches} (Seeds: {batch_seeds[0]} to {batch_seeds[-1]})") 
+
+        print(f"==========================================") 
+
+  
+
+        batch_records = [] 
+
+        mc_history_dict = {} 
+
+        all_tactical_data = [] 
+
+  
+
+        for idx, s in enumerate(batch_seeds): 
+
+            print(f"Running Seed {idx+1}/{RUNS_PER_BATCH} (Seed ID: {s})...") 
+
+            model = SpatialWasteMarketModel(width=150, height=150, start_year=2015, seed=s) 
+
+            for _ in range(252): model.step() 
+
+  
+
+            mc_history_dict[s] = model.simulation_history 
+
+            all_tactical_data.extend(model.agent_14_tactical_history) 
+
+  
+
+            inspector = model.inspector_agent 
+
+            p1_success = (inspector.phase1_caught / max(1, inspector.phase1_audits)) * 100.0 
+
+            p2_success = (inspector.phase2_caught / max(1, inspector.phase2_audits)) * 100.0 
+
+  
+
+            tactic_perf = {} 
+
+            for t_id in range(4): 
+
+                audits = inspector.tactic_audits[t_id] 
+
+                caught = inspector.tactic_caught[t_id] 
+
+                tactic_perf[t_id] = (caught / max(1, audits)) * 100.0 
+
+  
+
+            final_rec = model.simulation_history[-1] 
+
+            batch_records.append({ 
+
+                "Seed": s, 
+
+                "Phase1_Success_%": min(100.0, p1_success), 
+
+                "Phase2_Success_%": min(100.0, p2_success), 
+
+                "Tactic_0_Success_%": min(100.0, tactic_perf[0]), 
+
+                "Tactic_1_Success_%": min(100.0, tactic_perf[1]), 
+
+                "Tactic_2_Success_%": min(100.0, tactic_perf[2]), 
+
+                "Tactic_3_Success_%": min(100.0, tactic_perf[3]), 
+
+                "Final_Compliance_Rate": final_rec.get("true_compliance_rate", 0.0), 
+
+                "Total_Illegal_Tonnage": model.total_dumped_waste 
+
+            }) 
+
+            del model 
+
+  
+
+        # Save batch CSV result 
+
+        df_batch = pd.DataFrame(batch_records) 
+
+        batch_filename = os.path.join(desktop_path, f"batch_{b}_results.csv") 
+
+        df_batch.to_csv(batch_filename, index=False) 
+
+        print(f"[SUCCESS] Batch {b} results saved to: {batch_filename}") 
+
+  
+
+        # Generate Agent 14 figures 
+
+        generate_figure_agent_14_behavioral_panel(mc_history_dict, target_id=TARGET_AGENT_ID) 
+
+        generate_figure_agent_14_tactical_adaptation(all_tactical_data, target_id=TARGET_AGENT_ID) 
+
+ 
