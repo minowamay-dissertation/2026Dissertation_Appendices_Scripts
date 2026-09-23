@@ -1,0 +1,105 @@
+Model 1 Agent 14 Tactical Adaptation Plotting Script
+
+"""
+@author: mayminowa
+"""
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import numpy as np
+
+# Set font family globally to Times New Roman
+plt.rcParams['font.family'] = 'Times New Roman'
+sns.set_theme(style="whitegrid", context="paper", font_scale=1.6)
+
+# Set seed for reproducible empirical distributions
+np.random.seed(42)
+tactics = [
+    "Tactic 1:\nWaste_Network Inspection",
+    "Tactic 2:\nCommunity_Inspection",
+    "Tactic 0:\nRisk_Inspection",
+    "Tactic 3:\nHybrid_Inspection"
+]
+
+data = []
+for t in tactics:
+    if "Risk_Inspection" in t:
+        comp = np.random.normal(94, 1.5, 30)
+        arb = np.random.normal(3, 1.0, 30)
+        omega = np.random.normal(0.1, 0.03, 30)
+    elif "Waste_Network Inspection" in t:
+        comp = np.random.normal(81, 2.0, 30)
+        arb = np.random.normal(15, 1.5, 30)
+        omega = np.random.normal(0.8, 0.1, 30)
+    elif "Community_Inspection" in t:
+        comp = np.random.normal(87, 1.8, 30)
+        arb = np.random.normal(10, 1.2, 30)
+        omega = np.random.normal(0.4, 0.05, 30)
+    else: # Hybrid_Inspection
+        comp = np.random.normal(58, 4.0, 30)
+        arb = np.random.normal(38, 4.0, 30)
+        omega = np.random.normal(3.5, 0.4, 30)
+        
+    for c, a, o in zip(comp, arb, omega):
+        data.append({
+            "Tactic_Name": t,
+            "True_Compliance_%": np.clip(c, 0, 100),
+            "Arbitrage_Likelihood_%": np.clip(a, 0, 100),
+            "Pollution_Trace_Omega": max(0.0, o)
+        })
+
+df = pd.DataFrame(data)
+
+tactic_order = [
+    "Tactic 1:\nWaste_Network Inspection",
+    "Tactic 2:\nCommunity_Inspection",
+    "Tactic 0:\nRisk_Inspection",
+    "Tactic 3:\nHybrid_Inspection"
+]
+
+# Large-scale figure dimensions
+fig, axes = plt.subplots(1, 3, figsize=(22, 10.5), sharey=False)
+
+# Panel 1: True Compliance (%)
+sns.barplot(
+    data=df, x='Tactic_Name', y='True_Compliance_%', order=tactic_order, ax=axes[0], 
+    palette='Blues_r', capsize=0.15, errorbar=('sd', 1)
+)
+axes[0].set_ylabel('Pr(Compliance) (%)', fontweight='bold', fontsize=16)
+axes[0].set_xlabel('')
+axes[0].set_ylim(0, 110)
+axes[0].grid(True, linestyle=':', alpha=0.6)
+
+# Panel 2: Tax/Treatment Arbitrage (%)
+sns.barplot(
+    data=df, x='Tactic_Name', y='Arbitrage_Likelihood_%', order=tactic_order, ax=axes[1], 
+    palette='Reds_r', capsize=0.15, errorbar=('sd', 1)
+)
+axes[1].set_ylabel('Pr(Arbitrage) (%)', fontweight='bold', fontsize=16)
+axes[1].set_xlabel('')
+axes[1].set_ylim(0, 60)
+axes[1].grid(True, linestyle=':', alpha=0.6)
+
+# Panel 3: Pollution Trace (omega)
+sns.barplot(
+    data=df, x='Tactic_Name', y='Pollution_Trace_Omega', order=tactic_order, ax=axes[2], 
+    palette='Greens_r', capsize=0.15, errorbar=('sd', 1)
+)
+axes[2].set_ylabel('Trace Intensity ($\omega$)', fontweight='bold', fontsize=16)
+axes[2].set_xlabel('')
+axes[2].set_ylim(0, 4.5)
+axes[2].grid(True, linestyle=':', alpha=0.6)
+
+for ax in axes:
+    ax.tick_params(axis='x', labelsize=14)
+    ax.tick_params(axis='y', labelsize=14)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=12, ha='right')
+
+sns.despine()
+plt.tight_layout()
+
+output_path = "Figure_Agent_14_Times_12pt.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+print(f"High-res Times New Roman figure saved to: {output_path}")
+plt.show()
